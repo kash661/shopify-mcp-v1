@@ -529,6 +529,213 @@ async def shopify_cancel_order(params: CancelOrderInput) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# DRAFT ORDERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ListDraftOrdersInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    limit:          Optional[int] = Field(default=50, ge=1, le=250)
+    status:         Optional[str] = Field(default=None, description="open, invoice_sent, completed")
+    since_id:       Optional[int] = Field(default=None)
+    updated_at_min: Optional[str] = Field(default=None, description="ISO 8601 date")
+    updated_at_max: Optional[str] = Field(default=None)
+    ids:            Optional[str] = Field(default=None, description="Comma-separated list of draft order IDs")
+    fields:         Optional[str] = Field(default=None)
+
+
+@mcp.tool(
+    name="shopify_list_draft_orders",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+async def shopify_list_draft_orders(params: ListDraftOrdersInput) -> str:
+    """List draft orders with optional filters for status and date range."""
+    try:
+        p: Dict[str, Any] = {"limit": params.limit}
+        for field in ["status", "since_id", "updated_at_min", "updated_at_max", "ids", "fields"]:
+            val = getattr(params, field)
+            if val is not None:
+                p[field] = val
+        data   = await _request("GET", "draft_orders.json", params=p)
+        drafts = data.get("draft_orders", [])
+        return _fmt({"count": len(drafts), "draft_orders": drafts})
+    except Exception as e:
+        return _error(e)
+
+
+class GetDraftOrderInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_order_id: int = Field(..., description="The Shopify draft order ID")
+
+
+@mcp.tool(
+    name="shopify_get_draft_order",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+async def shopify_get_draft_order(params: GetDraftOrderInput) -> str:
+    """Retrieve a single draft order by ID."""
+    try:
+        data = await _request("GET", f"draft_orders/{params.draft_order_id}.json")
+        return _fmt(data.get("draft_order", data))
+    except Exception as e:
+        return _error(e)
+
+
+class CreateDraftOrderInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    line_items:       List[Dict[str, Any]]       = Field(..., description="Line items. Each item: {variant_id, quantity} for catalog items OR {title, price, quantity} for custom items. Optional: applied_discount")
+    customer:         Optional[Dict[str, Any]]   = Field(default=None, description="Existing customer object, e.g. {\"id\": 12345}")
+    email:            Optional[str]              = Field(default=None, description="Customer email (used if no customer.id provided)")
+    phone:            Optional[str]              = Field(default=None)
+    shipping_address: Optional[Dict[str, Any]]   = Field(default=None, description="Shipping address object")
+    billing_address:  Optional[Dict[str, Any]]   = Field(default=None, description="Billing address object")
+    note:             Optional[str]              = Field(default=None, description="Internal note")
+    note_attributes:  Optional[List[Dict[str, Any]]] = Field(default=None, description="Custom name/value attributes")
+    tags:             Optional[str]              = Field(default=None, description="Comma-separated tags")
+    shipping_line:    Optional[Dict[str, Any]]   = Field(default=None, description="{title, price, custom}")
+    tax_exempt:       Optional[bool]             = Field(default=None)
+    applied_discount: Optional[Dict[str, Any]]   = Field(default=None, description="Order-level discount: {value_type: 'fixed_amount'|'percentage', value, title, description}")
+    use_customer_default_address: Optional[bool] = Field(default=None)
+    currency:         Optional[str]              = Field(default=None, description="ISO 4217 currency code")
+
+
+@mcp.tool(
+    name="shopify_create_draft_order",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+async def shopify_create_draft_order(params: CreateDraftOrderInput) -> str:
+    """Create a new draft order. Requires write_draft_orders scope on the app."""
+    try:
+        draft: Dict[str, Any] = {"line_items": params.line_items}
+        for field in [
+            "customer", "email", "phone", "shipping_address", "billing_address",
+            "note", "note_attributes", "tags", "shipping_line", "tax_exempt",
+            "applied_discount", "use_customer_default_address", "currency",
+        ]:
+            val = getattr(params, field)
+            if val is not None:
+                draft[field] = val
+        data = await _request("POST", "draft_orders.json", body={"draft_order": draft})
+        return _fmt(data.get("draft_order", data))
+    except Exception as e:
+        return _error(e)
+
+
+class UpdateDraftOrderInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    draft_order_id:   int                        = Field(..., description="Draft order ID to update")
+    line_items:       Optional[List[Dict[str, Any]]] = Field(default=None)
+    customer:         Optional[Dict[str, Any]]   = Field(default=None)
+    email:            Optional[str]              = Field(default=None)
+    phone:            Optional[str]              = Field(default=None)
+    shipping_address: Optional[Dict[str, Any]]   = Field(default=None)
+    billing_address:  Optional[Dict[str, Any]]   = Field(default=None)
+    note:             Optional[str]              = Field(default=None)
+    note_attributes:  Optional[List[Dict[str, Any]]] = Field(default=None)
+    tags:             Optional[str]              = Field(default=None)
+    shipping_line:    Optional[Dict[str, Any]]   = Field(default=None)
+    tax_exempt:       Optional[bool]             = Field(default=None)
+    applied_discount: Optional[Dict[str, Any]]   = Field(default=None)
+
+
+@mcp.tool(
+    name="shopify_update_draft_order",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+async def shopify_update_draft_order(params: UpdateDraftOrderInput) -> str:
+    """Update a draft order. Only provided fields are changed. Cannot update after completion."""
+    try:
+        draft: Dict[str, Any] = {}
+        for field in [
+            "line_items", "customer", "email", "phone", "shipping_address",
+            "billing_address", "note", "note_attributes", "tags",
+            "shipping_line", "tax_exempt", "applied_discount",
+        ]:
+            val = getattr(params, field)
+            if val is not None:
+                draft[field] = val
+        data = await _request(
+            "PUT", f"draft_orders/{params.draft_order_id}.json", body={"draft_order": draft}
+        )
+        return _fmt(data.get("draft_order", data))
+    except Exception as e:
+        return _error(e)
+
+
+class CompleteDraftOrderInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_order_id:  int            = Field(..., description="Draft order ID to convert into a real order")
+    payment_pending: Optional[bool] = Field(default=None, description="If true, completes the draft but marks payment as pending (invoice the customer later)")
+
+
+@mcp.tool(
+    name="shopify_complete_draft_order",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+async def shopify_complete_draft_order(params: CompleteDraftOrderInput) -> str:
+    """Complete a draft order — converts it into a real order. Set payment_pending=true to skip capturing payment now."""
+    try:
+        p: Dict[str, Any] = {}
+        if params.payment_pending is not None:
+            p["payment_pending"] = "true" if params.payment_pending else "false"
+        data = await _request(
+            "PUT", f"draft_orders/{params.draft_order_id}/complete.json", params=p
+        )
+        return _fmt(data.get("draft_order", data))
+    except Exception as e:
+        return _error(e)
+
+
+class SendDraftOrderInvoiceInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    draft_order_id: int                 = Field(..., description="Draft order ID")
+    to:             Optional[str]       = Field(default=None, description="Recipient email (defaults to customer email)")
+    from_email:     Optional[str]       = Field(default=None, description="Sender email (mapped to Shopify 'from' field)")
+    subject:        Optional[str]       = Field(default=None)
+    custom_message: Optional[str]       = Field(default=None)
+    bcc:            Optional[List[str]] = Field(default=None, description="List of BCC email addresses")
+
+
+@mcp.tool(
+    name="shopify_send_draft_order_invoice",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+async def shopify_send_draft_order_invoice(params: SendDraftOrderInvoiceInput) -> str:
+    """Email the draft order invoice to the customer with an optional custom message."""
+    try:
+        invoice: Dict[str, Any] = {}
+        if params.to             is not None: invoice["to"]             = params.to
+        if params.from_email     is not None: invoice["from"]           = params.from_email
+        if params.subject        is not None: invoice["subject"]        = params.subject
+        if params.custom_message is not None: invoice["custom_message"] = params.custom_message
+        if params.bcc            is not None: invoice["bcc"]            = params.bcc
+        data = await _request(
+            "POST", f"draft_orders/{params.draft_order_id}/send_invoice.json",
+            body={"draft_order_invoice": invoice},
+        )
+        return _fmt(data.get("draft_order_invoice", data))
+    except Exception as e:
+        return _error(e)
+
+
+class DeleteDraftOrderInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_order_id: int = Field(..., description="Draft order ID to delete")
+
+
+@mcp.tool(
+    name="shopify_delete_draft_order",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+)
+async def shopify_delete_draft_order(params: DeleteDraftOrderInput) -> str:
+    """Permanently delete a draft order. This cannot be undone."""
+    try:
+        await _request("DELETE", f"draft_orders/{params.draft_order_id}.json")
+        return f"Draft order {params.draft_order_id} deleted."
+    except Exception as e:
+        return _error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CUSTOMERS
 # ═══════════════════════════════════════════════════════════════════════════
 
